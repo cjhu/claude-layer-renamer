@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body { font-family: sans-serif; padding: 16px; font-size: 13px; }
+      #status { margin-top: 12px; color: #555; min-height: 20px; }
+      .err { color: #c00; }
+      .ok  { color: #080; }
+    </style>
+  </head>
+  <body>
+    <p>Listening for commands from Claude Code…</p>
+    <p id="status">Connecting to bridge…</p>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const BRIDGE = "ws://localhost:9001";
+
+      // ── Connect to local bridge server ──────────────────────────────────────
+      let ws;
+      function connect() {
+        ws = new WebSocket(BRIDGE);
+
+        ws.onopen = () => {
+          statusEl.textContent = "✅ Connected to bridge";
+          statusEl.className = "ok";
+        };
+
+        ws.onerror = () => {
+          statusEl.textContent = "❌ Bridge not running — start the bridge server";
+          statusEl.className = "err";
+        };
+
+        ws.onclose = () => {
+          statusEl.textContent = "⚠️ Disconnected — retrying in 3s…";
+          statusEl.className = "";
+          setTimeout(connect, 3000);
+        };
+
+        // ── Receive commands from bridge, forward to plugin main thread ───────
+        ws.onmessage = (event) => {
+          try {
+            const cmd = JSON.parse(event.data);
+            statusEl.textContent = `⚙️ ${cmd.action}…`;
+            // Forward to code.ts
+            parent.postMessage({ pluginMessage: cmd }, "*");
+          } catch (e) {
+            statusEl.textContent = "❌ Bad message: " + event.data;
+          }
+        };
+      }
+
+      connect();
+
+      // ── Receive results from code.ts, send back to bridge ─────────────────
+      window.onmessage = (event) => {
+        const msg = event.data?.pluginMessage;
+        if (!msg || !ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify(msg));
+
+        if (msg.action === "renamed") {
+          statusEl.textContent = `✅ Renamed → "${msg.newName}"`;
+          statusEl.className = "ok";
+        } else if (msg.action === "error") {
+          statusEl.textContent = `❌ ${msg.message}`;
+          statusEl.className = "err";
+        }
+      };
+    </script>
+  </body>
+</html>
