@@ -17,6 +17,8 @@ interface LayerInfo {
   type: string;
   parentId: string | null;
   children: LayerInfo[];
+  texts: string[];         // all text content found inside this layer
+  componentName?: string;  // if it's a component instance, the main component's name
 }
 
 type Command = RenameCommand | ReadTreeCommand;
@@ -26,6 +28,21 @@ figma.showUI(__html__, { width: 300, height: 160, title: "Claude Layer Renamer" 
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Recursively collect all text content inside a node */
+function collectTexts(node: SceneNode): string[] {
+  const texts: string[] = [];
+  if (node.type === "TEXT") {
+    const chars = (node as TextNode).characters.trim();
+    if (chars) texts.push(chars);
+  }
+  if ("children" in node) {
+    for (const child of (node as ChildrenMixin).children) {
+      texts.push(...collectTexts(child as SceneNode));
+    }
+  }
+  return texts;
+}
+
 /** Recursively build a lightweight layer tree */
 function buildTree(node: SceneNode, parentId: string | null = null): LayerInfo {
   const info: LayerInfo = {
@@ -33,8 +50,15 @@ function buildTree(node: SceneNode, parentId: string | null = null): LayerInfo {
     name: node.name,
     type: node.type,
     parentId,
+    texts: collectTexts(node),
     children: [],
   };
+
+  // If it's a component instance, include the main component name
+  if (node.type === "INSTANCE") {
+    const main = (node as InstanceNode).mainComponent;
+    if (main) info.componentName = main.name;
+  }
 
   if ("children" in node) {
     info.children = (node as ChildrenMixin).children.map((child) =>
