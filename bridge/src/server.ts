@@ -70,7 +70,7 @@ const mcp = new McpServer({
 // Tool 1: read the full layer tree from the current Figma page
 mcp.tool(
   "read_layer_tree",
-  "Read the complete layer tree of the currently open Figma page. Returns a nested JSON structure with each layer's id, name, and type. Always call this before renaming so you know the node IDs.",
+  "Read the complete layer tree of the currently open Figma page. Returns each layer's id, name, type, and — importantly — all text content found inside it (the 'texts' field) plus the main component name for instances ('componentName'). Use the texts and componentName fields to understand what a layer actually represents, even if its name is stale or duplicated from another layer.",
   {},
   async () => {
     const response = await sendToPlugin({ action: "readTree" });
@@ -146,7 +146,61 @@ mcp.tool(
   }
 );
 
-// ─── Start MCP over stdio (how Claude Code talks to it) ───────────────────────
+// Tool 4: get all number variables from the design system
+mcp.tool(
+  "get_design_variables",
+  "Fetch all NUMBER variables defined in the Figma file's local variable collections (e.g. spacing, corner radius tokens). Returns each variable's id, name, resolvedValue, and collectionName. Call this first so you know what variables are available to bind to.",
+  {},
+  async () => {
+    const response = await sendToPlugin({ action: "getVariables" });
+    const variables = (response as { action: string; variables: unknown[] }).variables;
+    return {
+      content: [{ type: "text", text: JSON.stringify(variables, null, 2) }],
+    };
+  }
+);
+
+// Tool 5: audit the file for hardcoded values that should be variables
+mcp.tool(
+  "audit_hardcoded_values",
+  "Walk every node on the current Figma page and find corner radius or spacing values that are hardcoded (not bound to a variable) but are close to an existing design system variable. Returns a list of suggestions with nodeId, field, currentValue, and the closest matching variable. Use tolerance to control how many px off a value can be and still get snapped (e.g. tolerance=2 means 8px snaps to a 9px variable).",
+  {
+    tolerance: z.number().default(2).describe("Max px difference allowed when matching a hardcoded value to a variable (default: 2)"),
+  },
+  async ({ tolerance }) => {
+    const response = await sendToPlugin({ action: "auditNodes", tolerance });
+    const results = (response as { action: string; results: unknown[] }).results;
+    return {
+      content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
+    };
+  }
+);
+
+// Tool 6: apply variable bindings to nodes
+mcp.tool(
+  "apply_variable_bindings",
+  "Bind design system variables to node fields in Figma, replacing hardcoded values. Use the output of audit_hardcoded_values to build the bindings list. Each binding needs a nodeId, the field to bind (e.g. 'topLeftRadius', 'paddingLeft'), and the variableId to bind to.",
+  {
+    bindings: z.array(
+      z.object({
+        nodeId: z.string().describe("Figma node ID"),
+        field: z.string().describe("The field to bind e.g. topLeftRadius, paddingLeft, itemSpacing"),
+        variableId: z.string().describe("The variable ID to bind to this field"),
+      })
+    ).describe("List of { nodeId, field, variableId } bindings to apply"),
+  },
+  async ({ bindings }) => {
+    const response = await sendToPlugin({ action: "applyVariableBindings", bindings });
+    const r = response as { action: string; applied: string[]; failed: string[] };
+    return {
+      content: [{
+        type: "text",
+        text: `Applied: ${r.applied.length}\nFailed: ${r.failed.length}\n\n${[...r.applied, ...r.failed.map(f => "❌ " + f)].join("\n")}`,
+      }],
+    };
+  }
+);
+
 
 const transport = new StdioServerTransport();
 await mcp.connect(transport);
